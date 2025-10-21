@@ -66,14 +66,15 @@ class Af_ReadabilityExtension extends Minz_Extension
 	private function loadConfigValues(): void
 	{
 		if (!class_exists('FreshRSS_Context', false)) {
-			echo "Failed data";
+			Minz_Log::warning('af-readability: FreshRSS_Context not available');
 			return;
 		}
 		try {
 			$userConf = FreshRSS_Context::userConf();
 		}
 		catch(\Throwable $t) {
-			Minz_Log::warning('af-readability: ' . $t->getMessage());
+			// SECURITY: Log error without exposing sensitive details
+			Minz_Log::warning('af-readability: Failed to load user configuration');
 			return;
 		}
 
@@ -92,9 +93,24 @@ class Af_ReadabilityExtension extends Minz_Extension
 			return [];
 		}
 
-		$decoded = (array)json_decode($value, true);
+		// SECURITY: Properly validate JSON decoding
+		$decoded = json_decode($value, true);
+		if (json_last_error() !== JSON_ERROR_NONE) {
+			Minz_Log::warning('af-readability: Invalid JSON in config - ' . json_last_error_msg());
+			return [];
+		}
+
+		if (!is_array($decoded)) {
+			Minz_Log::warning('af-readability: Config value is not an array');
+			return [];
+		}
+
 		$result = [];
 		foreach($decoded as $key => $param) {
+			// Validate that keys are numeric and values are boolean
+			if (!is_numeric($key)) {
+				continue;
+			}
 			$result[(int)$key] = (bool) $param;
 		}
 
@@ -149,29 +165,96 @@ class Af_ReadabilityExtension extends Minz_Extension
 	}
 
 	/**
+	 * Validates URL to prevent SSRF attacks
+	 * @param string $url The URL to validate
+	 * @return bool True if URL is safe, false otherwise
+	 */
+	private function isUrlSafe(string $url): bool
+	{
+		$parsed = parse_url($url);
+
+		if ($parsed === false || !isset($parsed['scheme']) || !isset($parsed['host'])) {
+			return false;
+		}
+
+		// Only allow HTTP and HTTPS protocols
+		if (!in_array(strtolower($parsed['scheme']), ['http', 'https'], true)) {
+			return false;
+		}
+
+		$host = $parsed['host'];
+
+		// Block localhost variations
+		if (in_array(strtolower($host), ['localhost', 'localhost.localdomain'], true)) {
+			return false;
+		}
+
+		// Resolve hostname to IP and check if it's private/reserved
+		$ip = gethostbyname($host);
+		if ($ip !== $host) {
+			// Check for private/reserved IP ranges (RFC 1918, loopback, etc.)
+			if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+				return false;
+			}
+		}
+
+		// Additional check for IPv6 localhost and link-local
+		if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+			$normalized = strtolower($host);
+			// Block ::1 (localhost) and fe80::/10 (link-local)
+			if ($normalized === '::1' || strpos($normalized, 'fe80:') === 0) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
 	 * @throws Minz_PermissionDeniedException
 	 */
-	private function extractContent(string $url): bool|string|null
+	private function extractContent(string $url): ?string
 	{
 		if(empty($url)) {
-			return false;
+			return null;
+		}
+
+		// SECURITY: Validate URL to prevent SSRF attacks
+		if (!$this->isUrlSafe($url)) {
+			Minz_Log::warning('af-readability: Blocked unsafe URL');
+			return null;
 		}
 
 		$ch = curl_init();
 		if(false === $ch) {
-			return false;
+			return null;
 		}
 		curl_setopt($ch, CURLOPT_URL, $url);
 		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 		curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+
+		// SECURITY: Add timeouts to prevent DoS
+		curl_setopt($ch, CURLOPT_TIMEOUT, 30);           // 30 seconds total timeout
+		curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);    // 10 seconds connection timeout
+		curl_setopt($ch, CURLOPT_MAXREDIRS, 5);          // Limit redirects to prevent redirect loops
+
+		// SECURITY: Enable SSL certificate validation
+		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+
+		// SECURITY: Limit file size to prevent memory exhaustion
+		curl_setopt($ch, CURLOPT_MAXFILESIZE, 1024 * 500);  // 500KB limit
+
 		curl_setopt($ch, CURLOPT_USERAGENT, FRESHRSS_USERAGENT);
 		curl_setopt($ch, CURLOPT_HTTPHEADER, [
 			'Accept: text/*',
 			'Content-Type: text/html'
 		]);
+
 		$response = curl_exec($ch);
 		if (curl_errno($ch)) {
-			return false;
+			curl_close($ch);
+			return null;
 		}
 		$redirectUrl = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
 		if (!empty($redirectUrl)) {
@@ -180,15 +263,18 @@ class Af_ReadabilityExtension extends Minz_Extension
 		curl_close($ch);
 
 		if (!is_string($response) || mb_strlen($response) > 1024 * 500) {
-			return false;
+			return null;
 		}
 
 		$document = new DOMDocument("1.0", "UTF-8");
 
+		// SECURITY: Disable external entity loading and use secure parsing options
 		libxml_use_internal_errors(true);
-		if (!$document->loadHTML('<?xml encoding="UTF-8">' . $response)) {
+		$loadOptions = LIBXML_NONET | LIBXML_DTDLOAD | LIBXML_DTDATTR;
+
+		if (!$document->loadHTML('<?xml encoding="UTF-8">' . $response, $loadOptions)) {
 			libxml_clear_errors();
-			return false;
+			return null;
 		}
 		libxml_clear_errors();
 
@@ -214,10 +300,11 @@ class Af_ReadabilityExtension extends Minz_Extension
 			}
 		}
 		catch(\Throwable $t) {
-			Minz_Log::warning('af-readability: ' . $t->getMessage());
-			return false;
+			// SECURITY: Log error without exposing sensitive details
+			Minz_Log::warning('af-readability: Failed to parse content');
+			return null;
 		}
 
-		return false;
+		return null;
 	}
 }

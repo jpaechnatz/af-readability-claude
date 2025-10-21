@@ -19,7 +19,7 @@
 		}
 	},
 	"require": {
-		"fivefilters/readability.php": "*",
-		"psr/http-factory": "1.0.1"
+		"fivefilters/readability.php": "^3.3",
+		"psr/http-factory": "^1.0"
 	}
 }
