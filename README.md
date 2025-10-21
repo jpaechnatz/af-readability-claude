@@ -30,7 +30,12 @@ This FreshRSS extension uses the [Fivefilters Readability.php library](https://g
      - Docker: `/usr/share/freshrss/extensions/`
      - Manual install: `/path/to/FreshRSS/extensions/`
 
-3. **Set proper permissions**:
+3. **Dependencies**:
+   - **All dependencies are already included** in the `vendor/` directory
+   - **No Composer required** - works out of the box!
+   - (Optional: Run `composer install` only if you want to update dependencies)
+
+4. **Set proper permissions**:
    - Ensure the web server has read access to the extension files
    - Example: `chown -R www-data:www-data /path/to/extensions/af_readability`
 

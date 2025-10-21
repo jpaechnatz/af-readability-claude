@@ -17,8 +17,9 @@ cd /path/to/FreshRSS/extensions/af_readability
 git fetch origin
 git checkout claude/security-audit-011CULLMXFTtaMdusNbTbfSh
 
-# Update dependencies (important!)
-composer install --no-dev
+# Dependencies are already included - no composer needed!
+# (Optional: only if you want to update dependencies)
+# composer install --no-dev
 ```
 
 ### Option 2: Fresh Installation
@@ -33,19 +34,30 @@ git clone https://github.com/jpaechnatz/af-readability-claude.git af_readability
 cd af_readability
 git checkout claude/security-audit-011CULLMXFTtaMdusNbTbfSh
 
-# Install dependencies
-composer install --no-dev
+# Dependencies are already included - no composer needed!
+# (Optional: only if you want to update dependencies)
+# composer install --no-dev
 ```
 
 ### Option 3: Docker Installation
+
+**⚠️ Important for Docker users:** Composer is usually not included in FreshRSS Docker images, but you don't need it! All dependencies are already included in the repository.
+
+See **DOCKER_INSTALLATION.md** for detailed German instructions.
 
 ```bash
 # If using Docker, exec into the container first
 docker exec -it freshrss bash
 
-# Then follow Option 1 or 2 above
+# Clone or update the extension
 cd /usr/share/freshrss/extensions/
-# ... rest of commands
+git clone https://github.com/jpaechnatz/af-readability-claude.git af_readability
+cd af_readability
+git checkout claude/security-audit-011CULLMXFTtaMdusNbTbfSh
+
+# Set permissions and exit
+chown -R www-data:www-data /usr/share/freshrss/extensions/af_readability
+exit
 ```
 
 ---
